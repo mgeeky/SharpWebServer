@@ -45,7 +45,7 @@ C:\> SharpWebServer.exe port=8888 dir=C:\Windows\Temp verbose=true ntlm=true
 [.] Will run for this long       : 60 seconds
 [.] Verbose mode turned on.
 [.] NTLM mode turned on.
-[.] Serving files from directory : d:\dev2\SharpWebServer\SharpWebServer\bin\Debug
+[.] Serving files from directory : C:\Windows\Temp
 
 SharpWebServer [29.03.21, 17:55:14] NTLM: Sending 401 Unauthorized due to lack of Authorization header.
 SharpWebServer [29.03.21, 17:55:14] ::1 - "GET /test.txt" - len: 0 (401)
