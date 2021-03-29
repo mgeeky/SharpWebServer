@@ -15,7 +15,8 @@ Authors:
     - Can Güney Aksakalli (github.com/aksakalli)          - original implementation
     - harrypatrick442 (github.com/harrypatrick442)        - aksakalli's fork & changes
     - Dominic Chell (@domchell) from MDSec                - Net-NTLMv2 hashes capture code borrowed from Farmer
-    - Mariusz B. / mgeeky, <mb [at] binary-offensive.com> - combined all building blocks together
+    - Mariusz B. / mgeeky, <mb [at] binary-offensive.com> - combined all building blocks together,
+                                                            added connection keep-alive to NTLM Authentication
 
 Usage:
     SharpWebServer.exe <port=port> [dir=path] [verbose=true] [ntlm=true] [logfile=path]
@@ -28,6 +29,7 @@ Options:
     ntlm    - Require NTLM Authentication before serving files. Useful to collect NetNTLMv2 hashes
               (in MDSec's Farmer style)
     logfile - Path to output logfile.
+
 ```
 
 ## Example
@@ -84,13 +86,13 @@ foobar
 This tool is a mix of building block from following original authors:
 
 - MIT License - Copyright (c) 2016 Can Güney Aksakalli
-  https://aksakalli.github.io/2014/02/24/simple-http-server-with-csparp.html
-  https://gist.github.com/aksakalli/9191056
+  - https://aksakalli.github.io/2014/02/24/simple-http-server-with-csparp.html
+  - https://gist.github.com/aksakalli/9191056
 
 - Modified by harrypatrick442 here:
-  https://gist.github.com/harrypatrick442/0b6aa6fe001a0f93533219c8180af5df
+  - https://gist.github.com/harrypatrick442/0b6aa6fe001a0f93533219c8180af5df
 
 - NTLM hashes capture code taken from MDSec ActiveBreach Farmer project written by Dominic Chell (@domchell):
-  https://github.com/mdsecactivebreach/Farmer
+  - https://github.com/mdsecactivebreach/Farmer
 
 - All pieces combined together by me, `Mariusz B. / mgeeky, '21, <mb [at] binary-offensive.com>`
