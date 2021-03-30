@@ -1048,7 +1048,8 @@ namespace SharpWebServer
                                     {
                                         Headers = new Dictionary<string, string>(),
                                         Output = null,
-                                        HttpVersion = "HTTP/1.1"
+                                        HttpVersion = "HTTP/1.1",
+                                        ContentType = ""
                                     };
                                     request = new MyRequest
                                     {
