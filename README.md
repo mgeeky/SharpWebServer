@@ -101,6 +101,15 @@ C:\> copy \\localhost@8888\test\test4\test5.txt .
         1 file(s) copied.
 ```
 
+## Known Issues
+
+- WebDAV change directory: `cd \\host@port\webdav` doesnt work at the moment.
+
+- Browsing WebDAV while `ntlm=true` does not returns file contents as of yet.
+
+- NTLM Authentication doesn't keep state, so whenever using WebDAV multiple PROPFIND queries get sent - each of these requests will have to be authenticated (extending time of service)
+
+
 ## Authors
 
 - NTLM hashes capture code & TCP Listener backbone borrowed from MDSec ActiveBreach Farmer project written by Dominic Chell (@domchell):

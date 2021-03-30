@@ -879,7 +879,15 @@ namespace SharpWebServer
         private void Initialize()
         {
             _listener = new TcpListener(System.Net.IPAddress.Any, _Port);
-            _listener.Start();
+            try
+            {
+                _listener.Start();
+            }
+            catch(Exception ex)
+            {
+                Console.WriteLine($"[!] Could not instantiate TCP listener: Port already taken?\n    Exception: {ex}");
+                System.Environment.Exit(0);
+            }
 
             ThreadPool.QueueUserWorkItem(Listen, null);
         }
@@ -1263,13 +1271,13 @@ namespace SharpWebServer
                 fileName = GetRequestedFileName(ref request);
                 string filePath = fileName == null ? null : Path.Combine(_RootDirectory, fileName);
 
-                if(filePath.Length == 0)
+                if(filePath == null || filePath.Length == 0)
                 {
                     response.StatusCode = (int)HttpStatusCode.OK;
                     response.StatusMessage = "OK";
                     return;
                 }
-                else if (filePath == null || !File.Exists(filePath))
+                else if (!File.Exists(filePath))
                 {
                     response.StatusCode = (int)HttpStatusCode.NotFound;
                     response.StatusMessage = "Not Found";
