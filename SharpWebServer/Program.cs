@@ -2,24 +2,12 @@
 // SharpWebServer
 //
 // Purpose:
-//   A Red Team oriented C# Simple HTTP Server with Net-NTLMv1/2 hashes capture functionality.
+//   A Red Team oriented C# Simple HTTP & WebDAV Server with Net-NTLM hashes capture functionality.
 //   Requires .NET Framework 4.5 and System.Net and System.Net.Sockets references.
 //
-// Original authors:
-//   This tool is a mix of building block from following original authors:
-//
-//   - MIT License - Copyright (c) 2016 Can Güney Aksakalli
-//      https://aksakalli.github.io/2014/02/24/simple-http-server-with-csparp.html
-//
-//   - Modified by harrypatrick442 here:
-//      https://gist.github.com/harrypatrick442/0b6aa6fe001a0f93533219c8180af5df
-//
-//   - NTLM hashes capture code taken from MDSec ActiveBreach Farmer project written by Dominic Chell (@domchell):
+// This project borrows code from:
+//   - NTLM hashes capture code & TCP Listener backbone borrowed from MDSec ActiveBreach Farmer project written by Dominic Chell (@domchell):
 //      https://github.com/mdsecactivebreach/Farmer
-//
-// Disclaimer:
-//   My addition was the use of Connection keep-alive during NTLM Authentication process to avoid use of HTTP/1.0 and 
-//   to facilitate correct authentication flow resulting in file download.
 //
 // Patchworked by:
 //   Mariusz B. / mgeeky, '21, <mb [at] binary-offensive.com>
@@ -35,6 +23,8 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Xml;
+using System.Text;
 
 namespace SharpWebServer
 {
@@ -929,6 +919,8 @@ namespace SharpWebServer
 
         public struct MyRequest
         {
+            public IPEndPoint remoteEndpoint;
+            public IPEndPoint localEndpoint;
             public string PeerIP;
             public string HttpMethod;
             public string Uri;
@@ -991,12 +983,15 @@ namespace SharpWebServer
                     {
                         Headers = new Dictionary<string, string>(),
                         Output = null,
-                        HttpVersion = "HTTP/1.1"
+                        HttpVersion = "HTTP/1.1",
+                        ContentType = "",
                     };
 
                     var request = new MyRequest
                     {
-                        Headers = new Dictionary<string, string>(StringComparer.InvariantCultureIgnoreCase)
+                        Headers = new Dictionary<string, string>(StringComparer.InvariantCultureIgnoreCase),
+                        remoteEndpoint = ((IPEndPoint)client.Client.RemoteEndPoint),
+                        localEndpoint = ((IPEndPoint)client.Client.LocalEndPoint),
                     };
 
                     while (requestFinished == 0)
@@ -1024,6 +1019,12 @@ namespace SharpWebServer
                             if (lineInput == "")
                             {
                                 request.Body = "";
+                                int peekChar = 0;
+
+                                while((peekChar = reader.Peek()) != -1)
+                                {
+                                    request.Body += (char)reader.Read();
+                                }
 
                                 Process(ref request, ref response);
                                 var output = PrepareResponse(ref request, ref response);
@@ -1033,7 +1034,7 @@ namespace SharpWebServer
 
                                 System.Threading.Thread.Sleep(500);
 
-                                if (response.Headers.ContainsKey("Connection") && response.Headers["Connection"].ToLower().Equals("Close"))
+                                if (response.Headers.ContainsKey("Connection") && response.Headers["Connection"].ToLower().Equals("close"))
                                 {
                                     requestFinished = 1;
                                     client.Close();
@@ -1051,14 +1052,19 @@ namespace SharpWebServer
                                     };
                                     request = new MyRequest
                                     {
-                                        Headers = new Dictionary<string, string>(StringComparer.InvariantCultureIgnoreCase)
+                                        Headers = new Dictionary<string, string>(StringComparer.InvariantCultureIgnoreCase),
+                                        remoteEndpoint = ((IPEndPoint)client.Client.RemoteEndPoint),
+                                        localEndpoint = ((IPEndPoint)client.Client.LocalEndPoint),
                                     };
                                 }
                             }
                             else
                             {
-                                string[] line = lineInput.Split(':');
-                                request.Headers.Add(line[0].Trim(), line[1].TrimStart());
+                                var pos = lineInput.IndexOf(':');
+                                if(pos != -1 && (pos + 1) < lineInput.Length)
+                                {
+                                    request.Headers.Add(lineInput.Substring(0, pos), lineInput.Substring(pos+1).TrimStart());
+                                }
                             }
                         }
                     }
@@ -1075,6 +1081,11 @@ namespace SharpWebServer
             if (response.ContentLength > 0 && !response.Headers.ContainsKey("content-length"))
             {
                 response.Headers.Add("Content-Length", response.ContentLength.ToString());
+            }
+
+            if(!response.Headers.ContainsKey("Content-Type") && response.ContentType.Length > 0)
+            {
+                response.Headers.Add("Content-Type", response.ContentType);
             }
 
             response.Headers.Add("Server", "Microsoft-IIS/6.0");
@@ -1207,6 +1218,12 @@ namespace SharpWebServer
                 else if (request.HttpMethod.ToLower() == "head")
                     OnProcessHEAD(ref request, ref response);
 
+                else if (request.HttpMethod.ToLower() == "options")
+                    OnProcessOPTIONS(ref request, ref response);
+
+                else if (request.HttpMethod.ToLower() == "propfind")
+                    OnProcessPROPFIND(ref request, ref response);
+
                 response.Headers.Add("Connection", "Close");
             }
 
@@ -1217,6 +1234,24 @@ namespace SharpWebServer
             }
 
             Log($"{request.PeerIP} - \"{request.HttpMethod} {request.Uri}\" - len: {sizeInBytes} ({response.StatusCode})");
+        }
+
+        private void OnProcessOPTIONS(ref MyRequest request, ref MyResponse response)
+        {
+            try
+            {
+                response.StatusCode = (int)HttpStatusCode.OK;
+                response.StatusMessage = "OK";
+                response.Headers.Add("Allow", "GET, HEAD, OPTIONS, PROPFIND");
+                response.Headers.Add("Dav", "1,2");
+                response.Headers.Add("MS-Author-Via", "DAV");
+            }
+            catch (Exception ex)
+            {
+                response.StatusCode = (int)HttpStatusCode.InternalServerError;
+                response.StatusMessage = "Internal Server Error";
+                Output($"[!] Exception occured in OPTIONS : {ex}");
+            }
         }
 
         private void OnProcessGET(ref MyRequest request, ref MyResponse response)
@@ -1246,7 +1281,7 @@ namespace SharpWebServer
             {
                 response.StatusCode = (int)HttpStatusCode.InternalServerError;
                 response.StatusMessage = "Internal Server Error";
-                Console.WriteLine($"[!] Exception occured while serving file: {fileName} . Exception: {ex}");
+                Output($"[!] Exception occured while serving file: {fileName} . Exception: {ex}");
             }
         }
 
@@ -1275,7 +1310,245 @@ namespace SharpWebServer
             {
                 response.StatusCode = (int)HttpStatusCode.InternalServerError;
                 response.StatusMessage = "Internal Server Error";
-                Console.WriteLine($"[!] Exception occured while serving file: {fileName} . Exception: {ex}");
+                Output($"[!] Exception occured while serving file: {fileName} . Exception: {ex}");
+            }
+        }
+
+        private void OnProcessPROPFIND(ref MyRequest request, ref MyResponse response)
+        {
+            string fileName = null;
+            try
+            {
+                fileName = GetRequestedFileName(ref request);
+                string filePath = fileName == null ? null : Path.Combine(_RootDirectory, fileName);
+
+                if (filePath.Length == 0 || filePath == null)
+                {
+                    filePath = _RootDirectory;
+                }
+
+                if (File.Exists(filePath) || Directory.Exists(filePath))
+                {
+                    ProcessPropfind(filePath, ref request, ref response);
+                }
+                else
+                {
+                    response.StatusCode = (int)HttpStatusCode.NotFound;
+                    response.StatusMessage = "Not Found";
+                }
+            }
+            catch (Exception ex)
+            {
+                response.StatusCode = (int)HttpStatusCode.InternalServerError;
+                response.StatusMessage = "Internal Server Error";
+                Output($"[!] Exception occured while serving file: {fileName} . Exception: {ex}");
+            }
+        }
+
+        private void GeneratePropfindXml(ref XmlWriter writer, bool isFile, string filePath, ref MyRequest request, ref MyResponse response, int depth = 0)
+        {
+            string host = request.localEndpoint.ToString();
+            if (request.Headers.ContainsKey("host")) host = request.Headers["Host"];
+
+            string path = filePath.Replace(_RootDirectory, "").Replace('\\', '/');
+            if (path.StartsWith("/")) path = path.Substring(1);
+            if (!isFile && path.EndsWith("/")) path = path.Substring(0, path.Length - 1);
+
+            string serverUrl = "http://" + host + "/" + path;
+
+            writer.WriteStartElement("D", "response", "DAV:");
+            writer.WriteAttributeString("xmlns", "ns1", null, "NS2");
+            writer.WriteStartElement("D", "href", "DAV:");
+            writer.WriteString(serverUrl);
+            writer.WriteEndElement();
+            writer.WriteStartElement("D", "propstat", "DAV:");
+            writer.WriteStartElement("D", "prop", "DAV:");
+
+            writer.WriteStartElement("D", "creationdate", "DAV:");
+            DateTime creation = File.GetCreationTime(filePath);
+            writer.WriteString(creation.ToString("yyyy-MM-ddTHH:mm:ssZ"));
+            writer.WriteEndElement(); //creationdate
+
+            writer.WriteStartElement("D", "getcontentlength", "DAV:");
+
+            if (isFile)
+            {
+                var size = new System.IO.FileInfo(filePath).Length;
+                writer.WriteString(size.ToString());
+            }
+            else
+            {
+                writer.WriteString("0");
+            }
+
+            writer.WriteEndElement(); //getcontentlength
+
+            if (!isFile)
+            {
+                writer.WriteStartElement("D", "getcontenttype", "DAV:");
+                writer.WriteString("httpd/unix-directory");
+                writer.WriteEndElement();
+            }
+
+            writer.WriteStartElement("D", "getlastmodified", "DAV:");
+            DateTime writetime = File.GetLastWriteTime(filePath);
+            writer.WriteString(writetime.ToString("ddd, dd MMM yyyy HH:mm:ss K"));
+            writer.WriteEndElement(); //getlastmodified
+
+            writer.WriteStartElement("D", "lockdiscovery", "DAV:");
+            writer.WriteString("");
+            writer.WriteEndElement();
+
+            writer.WriteStartElement("D", "resourcetype", "DAV:");
+            if (!isFile)
+            {
+                writer.WriteStartElement("D", "collection", "DAV:");
+                writer.WriteEndElement(); //collection
+            }
+            writer.WriteEndElement(); //resourcetype
+
+            writer.WriteStartElement("D", "supportedlock", "DAV:");
+            writer.WriteStartElement("D", "lockentry", "DAV:");
+            writer.WriteStartElement("D", "lockscope", "DAV:");
+            writer.WriteStartElement("D", "exclusive", "DAV:");
+            writer.WriteEndElement(); //exclusive
+            writer.WriteEndElement(); //lockscope
+
+            writer.WriteStartElement("D", "locktype", "DAV:");
+            writer.WriteStartElement("D", "write", "DAV:");
+            writer.WriteEndElement(); //write
+            writer.WriteEndElement(); //locktype
+
+            writer.WriteEndElement(); //lockentry
+            writer.WriteEndElement(); //supportedlock
+
+            writer.WriteEndElement(); //prop
+
+            writer.WriteStartElement("D", "status", "DAV:");
+            writer.WriteString($"{response.HttpVersion} 200 OK");
+            writer.WriteEndElement(); //status
+
+            writer.WriteEndElement(); //propstat
+
+            writer.WriteStartElement("D", "propstat", "DAV:");
+            writer.WriteStartElement("D", "prop", "DAV:");
+
+            writer.WriteStartElement("D", "getcontentlanguage", "DAV:");
+            writer.WriteEndElement();
+
+            if (isFile)
+            {
+                writer.WriteStartElement("D", "getcontenttype", "DAV:");
+                writer.WriteString(GetContentType(filePath));
+                writer.WriteEndElement();
+            }
+
+            writer.WriteStartElement("D", "getetag", "DAV:");
+            writer.WriteEndElement();
+            writer.WriteStartElement("D", "source", "DAV:");
+            writer.WriteEndElement();
+            writer.WriteStartElement("ns1", "p1", "NS2");
+            writer.WriteEndElement();
+            writer.WriteStartElement("ns1", "p2", "NS2");
+            writer.WriteEndElement();
+
+            writer.WriteEndElement(); //prop
+
+            writer.WriteStartElement("D", "status", "DAV:");
+            writer.WriteString($"{response.HttpVersion} 404 Not Found");
+            writer.WriteEndElement(); //status
+
+            writer.WriteEndElement(); //propstat
+
+            writer.WriteEndElement(); //response
+        }
+
+        private string GetPropfindResponse(string filePath, ref MyRequest request, ref MyResponse response, int depth = 0)
+        {
+            bool isFile = File.Exists(filePath);
+
+            using (var sw = new StringWriter())
+            {
+                XmlWriterSettings settings = new XmlWriterSettings();
+                settings.Encoding = System.Text.Encoding.UTF8;
+
+                XmlWriter writer = XmlWriter.Create(sw, settings);
+                writer.WriteStartDocument();
+
+                writer.WriteStartElement("D", "multistatus", "DAV:");
+
+                GeneratePropfindXml(ref writer, isFile, filePath, ref request, ref response);
+
+                if (depth > 0 && !isFile)
+                {
+                    foreach (string file in Directory.GetFiles(filePath))
+                    {
+                        bool isFile2 = File.Exists(file);
+                        GeneratePropfindXml(ref writer, isFile2, file, ref request, ref response, depth);
+                    }
+
+                    foreach (string file in Directory.GetDirectories(filePath))
+                    {
+                        bool isFile2 = File.Exists(file);
+                        GeneratePropfindXml(ref writer, isFile2, file, ref request, ref response, depth);
+                    }
+                }
+
+                writer.WriteEndElement(); //multistatus
+                writer.WriteEndDocument();
+
+                writer.Flush();
+                writer.Close();
+
+                string strxml = sw.ToString() + "\n";
+                strxml = strxml.Replace("utf-16", "utf-8");
+                return strxml;
+            }
+        }
+
+        private void ProcessPropfind(string filePath, ref MyRequest request, ref MyResponse response)
+        {
+            response.ContentType = "text/xml; encoding=\"utf-8\"";
+
+            XmlDocument xml = new XmlDocument();
+            if (request.Body.Length != 0)
+            {
+                try
+                {
+                    //xml.LoadXml(request.Body);
+                }
+                catch (Exception ex)
+                {
+                    response.StatusCode = (int)HttpStatusCode.InternalServerError;
+                    response.StatusMessage = "Internal Server Error";
+                    Output($"[!] Exception occured while parsing XML in PROPFIND: {ex}");
+                    return;
+                }
+            }
+            else
+            {
+                response.StatusCode = (int)207;
+                response.StatusMessage = "Multi-Status";
+
+                int depth = 0;
+                if (request.Headers.ContainsKey("depth"))
+                {
+                    try
+                    {
+                        depth = Int32.Parse(request.Headers["Depth"]);
+                    }
+                    catch (Exception ex)
+                    {
+                        response.StatusCode = (int)HttpStatusCode.InternalServerError;
+                        response.StatusMessage = "Internal Server Error";
+                        Output($"[!] Exception occured while parsing WebDAV Depth header: {ex}");
+                        return;
+                    }
+                }
+
+                response.Output = Encoding.ASCII.GetBytes(GetPropfindResponse(filePath, ref request, ref response, depth));
+                response.ContentLength = response.Output.Length;
+                response.Headers.Add("DAV", "1,2");
             }
         }
 
@@ -1344,7 +1617,7 @@ Options:
     dir     - Directory with files to be hosted.
     verbose - Turn verbose mode on.
     seconds - Specifies how long should the server be running. Default: indefinitely
-    ntlm    - Require NTLM Authentication before serving files. Useful to collect NetNTLMv2 hashes 
+    ntlm    - Require NTLM Authentication before serving files. Useful to collect NetNTLM hashes 
               (in MDSec's Farmer style)
     logfile - Path to output logfile.
 ");
@@ -1368,14 +1641,12 @@ Options:
             {
                 Output(@"
     :: SharpWebServer ::
-    a Red Team oriented C# Simple HTTP Server with Net-NTLMv1/2 hashes capture functionality
+    a Red Team oriented C# Simple HTTP & WebDAV Server with Net-NTLM hashes capture functionality
 
 Authors: 
-    - Can Güney Aksakalli (github.com/aksakalli)          - original implementation
-    - harrypatrick442 (github.com/harrypatrick442)        - aksakalli's fork & changes
-    - Dominic Chell (@domchell) from MDSec                - Net-NTLMv2 hashes capture code borrowed from Farmer
-    - Mariusz B. / mgeeky, <mb [at] binary-offensive.com> - combined all building blocks together, 
-                                                            added connection keep-alive to NTLM Authentication
+    - Dominic Chell (@domchell) from MDSec                - Net-NTLM hashes capture code borrowed from Farmer
+    - Mariusz B. / mgeeky, <mb [at] binary-offensive.com> - WebDAV implementation, NTLM Authentication keep-alive,
+                                                            all the rest.
 ");
                 Usage();
                 return;
