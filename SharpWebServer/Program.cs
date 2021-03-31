@@ -1681,12 +1681,20 @@ $FILES$    </ul>
         }
         private byte[] ReadFileRange(Stream input, ref MyResponse response, string rangeHeader)
         {
+            Console.WriteLine($"ReadFileRange. Header: {rangeHeader}");
             string[] ranges = rangeHeader.Split(',');
-            List<byte[]> rangeBuffers = new List<byte[]>();
             List<Tuple<int, int>> rangeBoundaries = new List<Tuple<int, int>>();
+
+            const uint MaxRanges = 128;
 
             foreach (string range in ranges)
             {
+                if (rangeBoundaries.Count() > MaxRanges)
+                {
+                    //throw new Exception("Too many ranges specified.");
+                    break;
+                }
+
                 string[] parts = range.Trim().Split('-');
                 Console.WriteLine($"debug: processing range: ({range}). parts: {String.Join(", ", parts)}");
                 int fromByte = 0;
@@ -1699,7 +1707,7 @@ $FILES$    </ul>
                 {
                     int tmp = Int32.Parse(parts[1]);
                     fromByte = (int)input.Length - tmp;
-                    toByte = (int)input.Length;
+                    toByte = (int)input.Length - 1;
 
                     if (fromByte < 0 || fromByte > input.Length || toByte - fromByte < 0 || toByte - fromByte > input.Length)
                         throw new Exception("Invalid range-end.");
@@ -1708,7 +1716,7 @@ $FILES$    </ul>
                 {
                     int tmp = Int32.Parse(parts[0]);
                     fromByte = tmp;
-                    toByte = (int)input.Length;
+                    toByte = (int)input.Length - 1;
 
                     if (fromByte < 0 || fromByte > input.Length || toByte - fromByte < 0 || toByte - fromByte > input.Length)
                         throw new Exception("Invalid range-start.");
@@ -1718,7 +1726,7 @@ $FILES$    </ul>
                     fromByte = Int32.Parse(parts[0]);
                     toByte = Int32.Parse(parts[1]);
 
-                    if (toByte > input.Length) toByte = (int)input.Length;
+                    if (toByte >= input.Length) toByte = (int)input.Length - 1;
 
                     if (fromByte < 0 || fromByte > input.Length || toByte - fromByte < 0 || toByte - fromByte > input.Length)
                         throw new Exception("Invalid range-start.");
@@ -1730,21 +1738,26 @@ $FILES$    </ul>
                     throw new Exception($"Invalid range header specification");
                 }
 
-                byte[] buffer = new byte[toByte - fromByte];
-
-                input.Seek(fromByte, SeekOrigin.Begin);
-                input.Read(buffer, 0, (toByte - fromByte));
-                rangeBuffers.Add(buffer);
                 rangeBoundaries.Add(Tuple.Create(fromByte, toByte));
             }
 
-            if(rangeBuffers.Count() == 0)
+            if(rangeBoundaries.Count() == 0)
             {
                 throw new Exception($"Invalid range header specification");
             }
-            else if(rangeBuffers.Count() == 1)
+            else if(rangeBoundaries.Count() == 1)
             {
-                return rangeBuffers[0];
+                int fromByte = rangeBoundaries[0].Item1;
+                int toByte = rangeBoundaries[0].Item2;
+                byte[] buffer = new byte[toByte - fromByte + 1];
+
+                input.Seek(fromByte, SeekOrigin.Begin);
+                input.Read(buffer, 0, (toByte - fromByte + 1));
+
+                response.Headers.Add($"Content-Range", $"bytes {fromByte}-{toByte}/{input.Length}");
+                response.ContentLength = buffer.Length;
+
+                return buffer;
             }
             else
             {
@@ -1756,16 +1769,23 @@ $FILES$    </ul>
                 {
                     using (var writer = new StreamWriter(ms))
                     {
-                        for (int i = 0; i < rangeBuffers.Count(); i++)
+                        for (int i = 0; i < rangeBoundaries.Count(); i++)
                         {
-                            var buf = rangeBuffers[i];
-                            var boundaryRange = rangeBoundaries[i];
+                            int fromByte = rangeBoundaries[i].Item1;
+                            int toByte = rangeBoundaries[i].Item2;
+                            byte[] buffer = new byte[toByte - fromByte + 1];
+
+                            input.Seek(fromByte, SeekOrigin.Begin);
+                            input.Read(buffer, 0, (toByte - fromByte + 1));
 
                             writer.Write($"--{boundary}\r\n");
                             writer.Write($"Content-Type: {contentType}\r\n");
-                            writer.Write($"Content-Range: bytes {boundaryRange.Item1}-{boundaryRange.Item2}/{input.Length}\r\n");
+                            writer.Write($"Content-Range: bytes {fromByte}-{toByte}/{input.Length}\r\n");
                             writer.Write("\r\n");
-                            for (int j = 0; j < buf.Length; j++) writer.Write((char)buf[j]);
+
+                            for (int j = 0; j < buffer.Length; j++) 
+                                writer.Write((char)buffer[j]);
+
                             writer.Write("\r\n");
                         }
 
@@ -1782,7 +1802,7 @@ $FILES$    </ul>
         private static Random random = new Random();
         public static string RandomString(int length)
         {
-            const string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+            const string chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
             return new string(Enumerable.Repeat(chars, length)
               .Select(s => s[random.Next(s.Length)]).ToArray());
         }
