@@ -925,8 +925,14 @@ namespace SharpWebServer
                     if (e.ToString().Contains("Cannot access a disposed object."))
                     {
                         disposeErrors++;
-                        if (disposeErrors > 10) break;
+                        if (disposeErrors > 10)
+                        {
+                            Output($"[*] Exception occurred in Listen : {e.Message}");
+                            break;
+                        }
+                        continue;
                     }
+
                     Output($"[*] Exception occurred in Listen : {e.Message}");
                 }
             }
