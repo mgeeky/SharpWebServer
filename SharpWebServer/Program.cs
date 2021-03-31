@@ -1302,18 +1302,20 @@ namespace SharpWebServer
                 fileName = GetRequestedFileName(ref request);
                 string filePath = fileName == null ? null : Path.Combine(_RootDirectory, fileName);
 
-                if (filePath.Length == 0)
+                if (filePath == null || filePath.Length == 0)
                 {
                     response.StatusCode = (int)HttpStatusCode.OK;
                     response.StatusMessage = "OK";
+                    return;
                 }
-                else if (filePath == null || !File.Exists(filePath))
+                else if (!File.Exists(filePath))
                 {
                     response.StatusCode = (int)HttpStatusCode.NotFound;
                     response.StatusMessage = "Not Found";
+                    return;
                 }
 
-                return;
+                ReturnFile(filePath, ref response, true);
             }
             catch (Exception ex)
             {
@@ -1561,7 +1563,7 @@ namespace SharpWebServer
             }
         }
 
-        private void ReturnFile(string filePath, ref MyResponse response)
+        private void ReturnFile(string filePath, ref MyResponse response, bool noContents = false)
         {
             using (Stream input = new FileStream(filePath, FileMode.Open))
             {
@@ -1573,7 +1575,7 @@ namespace SharpWebServer
                 if (_AllowCors)
                     response.Headers.Add("Access-Control-Allow-Origin", "*");
 
-                response.Output = ReadFully(input);
+                if(!noContents) response.Output = ReadFully(input);
                 response.StatusCode = (int)HttpStatusCode.OK;
                 response.StatusMessage = "OK";
             }
