@@ -1279,6 +1279,7 @@ namespace SharpWebServer
                 else if (File.Exists(filePath))
                 {
                     ReturnFile(filePath, ref request, ref response);
+                    return;
                 }
                 else if (Directory.Exists(filePath))
                 {
@@ -1315,6 +1316,7 @@ namespace SharpWebServer
                 {
                     response.Headers.Add("Accept-Ranges", "bytes");
                     ReturnFile(filePath, ref request, ref response);
+                    return;
                 }
                 else if (Directory.Exists(filePath))
                 {
