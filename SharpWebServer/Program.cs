@@ -911,6 +911,8 @@ namespace SharpWebServer
 
         private void Listen(object token)
         {
+            int disposeErrors = 0;
+
             while(_listener != null)
             {
                 try
@@ -920,7 +922,12 @@ namespace SharpWebServer
                 }
                 catch (Exception e)
                 {
-                    Output($"[*] Exception occurred : {e.Message}");
+                    if (e.ToString().Contains("Cannot access a disposed object."))
+                    {
+                        disposeErrors++;
+                        if (disposeErrors > 10) break;
+                    }
+                    Output($"[*] Exception occurred in Listen : {e.Message}");
                 }
             }
         }
@@ -1081,7 +1088,7 @@ namespace SharpWebServer
             }
             catch (Exception e)
             {
-                Output($"[*] Exception occurred : {e.Message}");
+                Output($"[*] Exception occurred while handling client : {e.Message}");
             }
         }
 
@@ -1681,7 +1688,6 @@ $FILES$    </ul>
         }
         private byte[] ReadFileRange(Stream input, ref MyResponse response, string rangeHeader)
         {
-            Console.WriteLine($"ReadFileRange. Header: {rangeHeader}");
             string[] ranges = rangeHeader.Split(',');
             List<Tuple<int, int>> rangeBoundaries = new List<Tuple<int, int>>();
 
@@ -1696,7 +1702,6 @@ $FILES$    </ul>
                 }
 
                 string[] parts = range.Trim().Split('-');
-                Console.WriteLine($"debug: processing range: ({range}). parts: {String.Join(", ", parts)}");
                 int fromByte = 0;
                 int toByte = 0;
 
@@ -1806,8 +1811,6 @@ $FILES$    </ul>
             return new string(Enumerable.Repeat(chars, length)
               .Select(s => s[random.Next(s.Length)]).ToArray());
         }
-
-
         private string GetRequestedFileName(ref MyRequest request)
         {
             string fileName = request.Uri.Substring(1);
@@ -1815,7 +1818,6 @@ $FILES$    </ul>
                 fileName = GetExistingIndexFileName();
             return fileName;
         }
-
         public static byte[] ReadFully(Stream input)
         {
             using (MemoryStream ms = new MemoryStream())
@@ -1824,7 +1826,6 @@ $FILES$    </ul>
                 return ms.ToArray();
             }
         }
-
         private string GetContentType(string filePath)
         {
             string mime;
@@ -1844,7 +1845,6 @@ $FILES$    </ul>
             }
             return null;
         }
-
         static void Usage()
         {
             Output(@"Usage:
@@ -1860,7 +1860,6 @@ Options:
     logfile - Path to output logfile.
 ");
         }
-
         static void Output(string txt)
         {
             if(outputToFile.Length > 0)
@@ -1872,7 +1871,6 @@ Options:
                 Console.WriteLine(txt);
             }
         }
-
         static void Main(string[] args)
         {
             if (args.Length < 1)
@@ -1924,11 +1922,7 @@ Authors:
                 dir = arguments["dir"];
             }
 
-            if (arguments.ContainsKey("logfile"))
-            {
-                Output("[.] Will write output to logfile : " + arguments["logfile"]);
-                outputToFile = arguments["logfile"];
-            }
+            Output($"[.] Serving files from directory : {dir}");
 
             int seconds = 0;
             if (arguments.ContainsKey("seconds"))
@@ -1951,7 +1945,13 @@ Authors:
                 ntlm = true;
             }
 
-            Output($"[.] Serving files from directory : {dir}\n");
+            if (arguments.ContainsKey("logfile"))
+            {
+                Output("[.] Will write output to logfile : " + arguments["logfile"]);
+                outputToFile = arguments["logfile"];
+            }
+
+            Output("\n");
 
             var server = new SharpWebServer(dir, port, ntlm, verbose);
 
