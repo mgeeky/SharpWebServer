@@ -1271,20 +1271,23 @@ namespace SharpWebServer
                 fileName = GetRequestedFileName(ref request);
                 string filePath = fileName == null ? null : Path.Combine(_RootDirectory, fileName);
 
-                if(filePath == null || filePath.Length == 0)
+                if (filePath == null || filePath.Length == 0)
                 {
-                    response.StatusCode = (int)HttpStatusCode.OK;
-                    response.StatusMessage = "OK";
+                    ReturnDirlisting(_RootDirectory, ref request, ref response);
                     return;
                 }
-                else if (!File.Exists(filePath))
+                else if (File.Exists(filePath))
                 {
-                    response.StatusCode = (int)HttpStatusCode.NotFound;
-                    response.StatusMessage = "Not Found";
+                    ReturnFile(filePath, ref request, ref response);
+                }
+                else if (Directory.Exists(filePath))
+                {
+                    ReturnDirlisting(filePath, ref request, ref response);
                     return;
                 }
 
-                ReturnFile(filePath, ref response);
+                response.StatusCode = (int)HttpStatusCode.NotFound;
+                response.StatusMessage = "Not Found";
             }
             catch (Exception ex)
             {
@@ -1304,18 +1307,24 @@ namespace SharpWebServer
 
                 if (filePath == null || filePath.Length == 0)
                 {
-                    response.StatusCode = (int)HttpStatusCode.OK;
-                    response.StatusMessage = "OK";
+                    response.Headers.Add("Accept-Ranges", "bytes");
+                    ReturnDirlisting(_RootDirectory, ref request, ref response);
                     return;
                 }
-                else if (!File.Exists(filePath))
+                else if (File.Exists(filePath))
                 {
-                    response.StatusCode = (int)HttpStatusCode.NotFound;
-                    response.StatusMessage = "Not Found";
+                    response.Headers.Add("Accept-Ranges", "bytes");
+                    ReturnFile(filePath, ref request, ref response);
+                }
+                else if (Directory.Exists(filePath))
+                {
+                    response.Headers.Add("Accept-Ranges", "bytes");
+                    ReturnDirlisting(filePath, ref request, ref response);
                     return;
                 }
 
-                ReturnFile(filePath, ref response, true);
+                response.StatusCode = (int)HttpStatusCode.NotFound;
+                response.StatusMessage = "Not Found";
             }
             catch (Exception ex)
             {
@@ -1562,8 +1571,58 @@ namespace SharpWebServer
                 response.Headers.Add("DAV", "1,2");
             }
         }
+        private void ReturnDirlisting(string filePath, ref MyRequest request, ref MyResponse response, bool noContents = false)
+        {
+            response.ContentType = "text/html; charset=utf-8";
+            string template = @"<!DOCTYPE HTML PUBLIC ""-//W3C//DTD HTML 4.01//EN"" ""http://www.w3.org/TR/html4/strict.dtd"">
+<html>
+  <head>
+    <meta http-equiv=""Content-Type"" content=""text/html; charset=utf-8"">
+    <title>Directory listing for $TITLE$</title>
+  </head>
+  <body>
+    <h1>Directory listing for $TITLE$</h1>
+    <hr>
+    <ul>
+$FILES$    </ul>
+    <hr>
+  </body>
+</html>";
+            string dirpath = request.Uri.Substring(1);
+            if (dirpath.EndsWith("/")) dirpath = dirpath.Substring(0, dirpath.Length - 1);
 
-        private void ReturnFile(string filePath, ref MyResponse response, bool noContents = false)
+            template = template.Replace("$TITLE$", dirpath);
+
+            string filesHtml = "";
+
+            foreach (string file in Directory.GetDirectories(filePath))
+            {
+                string filename = Path.GetFileName(file);
+                string filep = $"/{dirpath}/{filename}/";
+                filesHtml += $@"      <li><a href=""{filep}"">{filename}</a></li>";
+                filesHtml += "\n";
+            }
+
+            foreach (string file in Directory.GetFiles(filePath))
+            {
+                string filename = Path.GetFileName(file);
+                string filep = $"/{dirpath}/{filename}";
+                filesHtml += $@"      <li><a href=""{filep}"">{filename}</a></li>";
+                filesHtml += "\n";
+            }
+
+            template = template.Replace("$FILES$", filesHtml);
+
+            if (!noContents)
+            {
+                response.Output = Encoding.GetEncoding("UTF-8").GetBytes(template);
+            }
+
+            response.ContentLength = template.Length;
+            response.StatusCode = (int)HttpStatusCode.OK;
+            response.StatusMessage = "OK";
+        }
+        private void ReturnFile(string filePath, ref MyRequest request, ref MyResponse response, bool noContents = false)
         {
             using (Stream input = new FileStream(filePath, FileMode.Open))
             {
@@ -1575,11 +1634,157 @@ namespace SharpWebServer
                 if (_AllowCors)
                     response.Headers.Add("Access-Control-Allow-Origin", "*");
 
-                if(!noContents) response.Output = ReadFully(input);
-                response.StatusCode = (int)HttpStatusCode.OK;
-                response.StatusMessage = "OK";
+                if (!noContents)
+                {
+                    if (request.Headers.ContainsKey("range"))
+                    {
+                        string rangeHeader = request.Headers["range"];
+                        if (rangeHeader.IndexOf("bytes=") == -1)
+                        {
+                            response.StatusCode = (int)HttpStatusCode.RequestedRangeNotSatisfiable;
+                            response.StatusMessage = "Requested Range Not Satisfiable";
+                            response.ContentLength = 0;
+                            return;
+                        }
+
+                        try
+                        {
+                            response.Output = ReadFileRange(input, ref response, rangeHeader.Replace("bytes=", ""));
+                            response.StatusCode = (int)HttpStatusCode.PartialContent;
+                            response.StatusMessage = "Partial Content";
+                            response.ContentLength = response.Output.Length;
+                        }
+                        catch (Exception ex)
+                        {
+                            Output($"Range header processing failed.: {ex}");
+                            response.StatusCode = (int)HttpStatusCode.RequestedRangeNotSatisfiable;
+                            response.StatusMessage = "Requested Range Not Satisfiable";
+                            response.ContentLength = 0;
+                            return;
+                        }
+                    }
+                    else
+                    {
+                        response.Output = ReadFully(input);
+                        response.StatusCode = (int)HttpStatusCode.OK;
+                        response.StatusMessage = "OK";
+                    }
+                }
+                else
+                {
+                    response.StatusCode = (int)HttpStatusCode.OK;
+                    response.StatusMessage = "OK";
+                }
             }
         }
+        private byte[] ReadFileRange(Stream input, ref MyResponse response, string rangeHeader)
+        {
+            string[] ranges = rangeHeader.Split(',');
+            List<byte[]> rangeBuffers = new List<byte[]>();
+            List<Tuple<int, int>> rangeBoundaries = new List<Tuple<int, int>>();
+
+            foreach (string range in ranges)
+            {
+                string[] parts = range.Trim().Split('-');
+                Console.WriteLine($"debug: processing range: ({range}). parts: {String.Join(", ", parts)}");
+                int fromByte = 0;
+                int toByte = 0;
+
+                if (parts[0].Length == 0 && parts[1].Length == 0)
+                    throw new Exception("Invalid range-start - range-end specification.");
+
+                if (parts[0].Length == 0)
+                {
+                    int tmp = Int32.Parse(parts[1]);
+                    fromByte = (int)input.Length - tmp;
+                    toByte = (int)input.Length;
+
+                    if (fromByte < 0 || fromByte > input.Length || toByte - fromByte < 0 || toByte - fromByte > input.Length)
+                        throw new Exception("Invalid range-end.");
+                }
+                else if (parts[0].Length > 0 && parts[1].Length == 0)
+                {
+                    int tmp = Int32.Parse(parts[0]);
+                    fromByte = tmp;
+                    toByte = (int)input.Length;
+
+                    if (fromByte < 0 || fromByte > input.Length || toByte - fromByte < 0 || toByte - fromByte > input.Length)
+                        throw new Exception("Invalid range-start.");
+                }
+                else if (parts[0].Length > 0 && parts[1].Length > 0)
+                {
+                    fromByte = Int32.Parse(parts[0]);
+                    toByte = Int32.Parse(parts[1]);
+
+                    if (toByte > input.Length) toByte = (int)input.Length;
+
+                    if (fromByte < 0 || fromByte > input.Length || toByte - fromByte < 0 || toByte - fromByte > input.Length)
+                        throw new Exception("Invalid range-start.");
+                    if (toByte < 0 || toByte > input.Length)
+                        throw new Exception("Invalid range-end.");
+                }
+                else
+                {
+                    throw new Exception($"Invalid range header specification");
+                }
+
+                byte[] buffer = new byte[toByte - fromByte];
+
+                input.Seek(fromByte, SeekOrigin.Begin);
+                input.Read(buffer, 0, (toByte - fromByte));
+                rangeBuffers.Add(buffer);
+                rangeBoundaries.Add(Tuple.Create(fromByte, toByte));
+            }
+
+            if(rangeBuffers.Count() == 0)
+            {
+                throw new Exception($"Invalid range header specification");
+            }
+            else if(rangeBuffers.Count() == 1)
+            {
+                return rangeBuffers[0];
+            }
+            else
+            {
+                string boundary = RandomString(12);
+                string contentType = response.ContentType;
+                response.ContentType = $"multipart/byteranges; boundary={boundary}";
+
+                using (var ms = new MemoryStream())
+                {
+                    using (var writer = new StreamWriter(ms))
+                    {
+                        for (int i = 0; i < rangeBuffers.Count(); i++)
+                        {
+                            var buf = rangeBuffers[i];
+                            var boundaryRange = rangeBoundaries[i];
+
+                            writer.Write($"--{boundary}\r\n");
+                            writer.Write($"Content-Type: {contentType}\r\n");
+                            writer.Write($"Content-Range: bytes {boundaryRange.Item1}-{boundaryRange.Item2}/{input.Length}\r\n");
+                            writer.Write("\r\n");
+                            for (int j = 0; j < buf.Length; j++) writer.Write((char)buf[j]);
+                            writer.Write("\r\n");
+                        }
+
+                        writer.Write($"--{boundary}--");
+                        writer.Flush();
+                    }
+
+                    ms.Flush();
+                    return ms.ToArray();
+                }
+            }
+        }
+
+        private static Random random = new Random();
+        public static string RandomString(int length)
+        {
+            const string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+            return new string(Enumerable.Repeat(chars, length)
+              .Select(s => s[random.Next(s.Length)]).ToArray());
+        }
+
 
         private string GetRequestedFileName(ref MyRequest request)
         {
