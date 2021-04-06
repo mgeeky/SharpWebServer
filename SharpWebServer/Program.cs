@@ -927,7 +927,7 @@ namespace SharpWebServer
                         disposeErrors++;
                         if (disposeErrors > 10)
                         {
-                            Output($"[*] Exception occurred in Listen : {e.Message}");
+                            //Output($"[*] Exception occurred in Listen : {e.Message}");
                             break;
                         }
                         continue;
@@ -1013,6 +1013,7 @@ namespace SharpWebServer
                         Headers = new Dictionary<string, string>(StringComparer.InvariantCultureIgnoreCase),
                         remoteEndpoint = ((IPEndPoint)client.Client.RemoteEndPoint),
                         localEndpoint = ((IPEndPoint)client.Client.LocalEndPoint),
+                        PeerIP = peerIP
                     };
 
                     while (requestFinished == 0)
@@ -1077,6 +1078,7 @@ namespace SharpWebServer
                                         Headers = new Dictionary<string, string>(StringComparer.InvariantCultureIgnoreCase),
                                         remoteEndpoint = ((IPEndPoint)client.Client.RemoteEndPoint),
                                         localEndpoint = ((IPEndPoint)client.Client.LocalEndPoint),
+                                        PeerIP = peerIP
                                     };
                                 }
                             }
