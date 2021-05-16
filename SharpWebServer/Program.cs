@@ -879,7 +879,15 @@ namespace SharpWebServer
         private void Initialize()
         {
             _listener = new TcpListener(System.Net.IPAddress.Any, _Port);
-            _listener.Start();
+            try
+            {
+                _listener.Start();
+            }
+            catch(Exception ex)
+            {
+                Console.WriteLine($"[!] Could not instantiate TCP listener: Port already taken?\n    Exception: {ex}");
+                System.Environment.Exit(0);
+            }
 
             ThreadPool.QueueUserWorkItem(Listen, null);
         }
@@ -903,6 +911,8 @@ namespace SharpWebServer
 
         private void Listen(object token)
         {
+            int disposeErrors = 0;
+
             while(_listener != null)
             {
                 try
@@ -912,7 +922,18 @@ namespace SharpWebServer
                 }
                 catch (Exception e)
                 {
-                    Output($"[*] Exception occurred : {e.Message}");
+                    if (e.ToString().Contains("Cannot access a disposed object."))
+                    {
+                        disposeErrors++;
+                        if (disposeErrors > 10)
+                        {
+                            //Output($"[*] Exception occurred in Listen : {e.Message}");
+                            break;
+                        }
+                        continue;
+                    }
+
+                    Output($"[*] Exception occurred in Listen : {e.Message}");
                 }
             }
         }
@@ -992,6 +1013,7 @@ namespace SharpWebServer
                         Headers = new Dictionary<string, string>(StringComparer.InvariantCultureIgnoreCase),
                         remoteEndpoint = ((IPEndPoint)client.Client.RemoteEndPoint),
                         localEndpoint = ((IPEndPoint)client.Client.LocalEndPoint),
+                        PeerIP = peerIP
                     };
 
                     while (requestFinished == 0)
@@ -1056,6 +1078,7 @@ namespace SharpWebServer
                                         Headers = new Dictionary<string, string>(StringComparer.InvariantCultureIgnoreCase),
                                         remoteEndpoint = ((IPEndPoint)client.Client.RemoteEndPoint),
                                         localEndpoint = ((IPEndPoint)client.Client.LocalEndPoint),
+                                        PeerIP = peerIP
                                     };
                                 }
                             }
@@ -1073,7 +1096,7 @@ namespace SharpWebServer
             }
             catch (Exception e)
             {
-                Output($"[*] Exception occurred : {e.Message}");
+                Output($"[*] Exception occurred while handling client : {e.Message}");
             }
         }
 
@@ -1263,20 +1286,24 @@ namespace SharpWebServer
                 fileName = GetRequestedFileName(ref request);
                 string filePath = fileName == null ? null : Path.Combine(_RootDirectory, fileName);
 
-                if(filePath.Length == 0)
+                if (filePath == null || filePath.Length == 0)
                 {
-                    response.StatusCode = (int)HttpStatusCode.OK;
-                    response.StatusMessage = "OK";
+                    ReturnDirlisting(_RootDirectory, ref request, ref response);
                     return;
                 }
-                else if (filePath == null || !File.Exists(filePath))
+                else if (File.Exists(filePath))
                 {
-                    response.StatusCode = (int)HttpStatusCode.NotFound;
-                    response.StatusMessage = "Not Found";
+                    ReturnFile(filePath, ref request, ref response);
+                    return;
+                }
+                else if (Directory.Exists(filePath))
+                {
+                    ReturnDirlisting(filePath, ref request, ref response);
                     return;
                 }
 
-                ReturnFile(filePath, ref response);
+                response.StatusCode = (int)HttpStatusCode.NotFound;
+                response.StatusMessage = "Not Found";
             }
             catch (Exception ex)
             {
@@ -1294,18 +1321,27 @@ namespace SharpWebServer
                 fileName = GetRequestedFileName(ref request);
                 string filePath = fileName == null ? null : Path.Combine(_RootDirectory, fileName);
 
-                if (filePath.Length == 0)
+                if (filePath == null || filePath.Length == 0)
                 {
-                    response.StatusCode = (int)HttpStatusCode.OK;
-                    response.StatusMessage = "OK";
+                    response.Headers.Add("Accept-Ranges", "bytes");
+                    ReturnDirlisting(_RootDirectory, ref request, ref response);
+                    return;
                 }
-                else if (filePath == null || !File.Exists(filePath))
+                else if (File.Exists(filePath))
                 {
-                    response.StatusCode = (int)HttpStatusCode.NotFound;
-                    response.StatusMessage = "Not Found";
+                    response.Headers.Add("Accept-Ranges", "bytes");
+                    ReturnFile(filePath, ref request, ref response);
+                    return;
+                }
+                else if (Directory.Exists(filePath))
+                {
+                    response.Headers.Add("Accept-Ranges", "bytes");
+                    ReturnDirlisting(filePath, ref request, ref response);
+                    return;
                 }
 
-                return;
+                response.StatusCode = (int)HttpStatusCode.NotFound;
+                response.StatusMessage = "Not Found";
             }
             catch (Exception ex)
             {
@@ -1552,8 +1588,58 @@ namespace SharpWebServer
                 response.Headers.Add("DAV", "1,2");
             }
         }
+        private void ReturnDirlisting(string filePath, ref MyRequest request, ref MyResponse response, bool noContents = false)
+        {
+            response.ContentType = "text/html; charset=utf-8";
+            string template = @"<!DOCTYPE HTML PUBLIC ""-//W3C//DTD HTML 4.01//EN"" ""http://www.w3.org/TR/html4/strict.dtd"">
+<html>
+  <head>
+    <meta http-equiv=""Content-Type"" content=""text/html; charset=utf-8"">
+    <title>Directory listing for $TITLE$</title>
+  </head>
+  <body>
+    <h1>Directory listing for $TITLE$</h1>
+    <hr>
+    <ul>
+$FILES$    </ul>
+    <hr>
+  </body>
+</html>";
+            string dirpath = request.Uri.Substring(1);
+            if (dirpath.EndsWith("/")) dirpath = dirpath.Substring(0, dirpath.Length - 1);
 
-        private void ReturnFile(string filePath, ref MyResponse response)
+            template = template.Replace("$TITLE$", dirpath);
+
+            string filesHtml = "";
+
+            foreach (string file in Directory.GetDirectories(filePath))
+            {
+                string filename = Path.GetFileName(file);
+                string filep = $"/{dirpath}/{filename}/";
+                filesHtml += $@"      <li><a href=""{filep}"">{filename}</a></li>";
+                filesHtml += "\n";
+            }
+
+            foreach (string file in Directory.GetFiles(filePath))
+            {
+                string filename = Path.GetFileName(file);
+                string filep = $"/{dirpath}/{filename}";
+                filesHtml += $@"      <li><a href=""{filep}"">{filename}</a></li>";
+                filesHtml += "\n";
+            }
+
+            template = template.Replace("$FILES$", filesHtml);
+
+            if (!noContents)
+            {
+                response.Output = Encoding.GetEncoding("UTF-8").GetBytes(template);
+            }
+
+            response.ContentLength = template.Length;
+            response.StatusCode = (int)HttpStatusCode.OK;
+            response.StatusMessage = "OK";
+        }
+        private void ReturnFile(string filePath, ref MyRequest request, ref MyResponse response, bool noContents = false)
         {
             using (Stream input = new FileStream(filePath, FileMode.Open))
             {
@@ -1565,12 +1651,174 @@ namespace SharpWebServer
                 if (_AllowCors)
                     response.Headers.Add("Access-Control-Allow-Origin", "*");
 
-                response.Output = ReadFully(input);
-                response.StatusCode = (int)HttpStatusCode.OK;
-                response.StatusMessage = "OK";
+                if (!noContents)
+                {
+                    if (request.Headers.ContainsKey("range"))
+                    {
+                        string rangeHeader = request.Headers["range"];
+                        if (rangeHeader.IndexOf("bytes=") == -1)
+                        {
+                            response.StatusCode = (int)HttpStatusCode.RequestedRangeNotSatisfiable;
+                            response.StatusMessage = "Requested Range Not Satisfiable";
+                            response.ContentLength = 0;
+                            return;
+                        }
+
+                        try
+                        {
+                            response.Output = ReadFileRange(input, ref response, rangeHeader.Replace("bytes=", ""));
+                            response.StatusCode = (int)HttpStatusCode.PartialContent;
+                            response.StatusMessage = "Partial Content";
+                            response.ContentLength = response.Output.Length;
+                        }
+                        catch (Exception ex)
+                        {
+                            Output($"Range header processing failed.: {ex}");
+                            response.StatusCode = (int)HttpStatusCode.RequestedRangeNotSatisfiable;
+                            response.StatusMessage = "Requested Range Not Satisfiable";
+                            response.ContentLength = 0;
+                            return;
+                        }
+                    }
+                    else
+                    {
+                        response.Output = ReadFully(input);
+                        response.StatusCode = (int)HttpStatusCode.OK;
+                        response.StatusMessage = "OK";
+                    }
+                }
+                else
+                {
+                    response.StatusCode = (int)HttpStatusCode.OK;
+                    response.StatusMessage = "OK";
+                }
+            }
+        }
+        private byte[] ReadFileRange(Stream input, ref MyResponse response, string rangeHeader)
+        {
+            string[] ranges = rangeHeader.Split(',');
+            List<Tuple<int, int>> rangeBoundaries = new List<Tuple<int, int>>();
+
+            const uint MaxRanges = 128;
+
+            foreach (string range in ranges)
+            {
+                if (rangeBoundaries.Count() > MaxRanges)
+                {
+                    //throw new Exception("Too many ranges specified.");
+                    break;
+                }
+
+                string[] parts = range.Trim().Split('-');
+                int fromByte = 0;
+                int toByte = 0;
+
+                if (parts[0].Length == 0 && parts[1].Length == 0)
+                    throw new Exception("Invalid range-start - range-end specification.");
+
+                if (parts[0].Length == 0)
+                {
+                    int tmp = Int32.Parse(parts[1]);
+                    fromByte = (int)input.Length - tmp;
+                    toByte = (int)input.Length - 1;
+
+                    if (fromByte < 0 || fromByte > input.Length || toByte - fromByte < 0 || toByte - fromByte > input.Length)
+                        throw new Exception("Invalid range-end.");
+                }
+                else if (parts[0].Length > 0 && parts[1].Length == 0)
+                {
+                    int tmp = Int32.Parse(parts[0]);
+                    fromByte = tmp;
+                    toByte = (int)input.Length - 1;
+
+                    if (fromByte < 0 || fromByte > input.Length || toByte - fromByte < 0 || toByte - fromByte > input.Length)
+                        throw new Exception("Invalid range-start.");
+                }
+                else if (parts[0].Length > 0 && parts[1].Length > 0)
+                {
+                    fromByte = Int32.Parse(parts[0]);
+                    toByte = Int32.Parse(parts[1]);
+
+                    if (toByte >= input.Length) toByte = (int)input.Length - 1;
+
+                    if (fromByte < 0 || fromByte > input.Length || toByte - fromByte < 0 || toByte - fromByte > input.Length)
+                        throw new Exception("Invalid range-start.");
+                    if (toByte < 0 || toByte > input.Length)
+                        throw new Exception("Invalid range-end.");
+                }
+                else
+                {
+                    throw new Exception($"Invalid range header specification");
+                }
+
+                rangeBoundaries.Add(Tuple.Create(fromByte, toByte));
+            }
+
+            if(rangeBoundaries.Count() == 0)
+            {
+                throw new Exception($"Invalid range header specification");
+            }
+            else if(rangeBoundaries.Count() == 1)
+            {
+                int fromByte = rangeBoundaries[0].Item1;
+                int toByte = rangeBoundaries[0].Item2;
+                byte[] buffer = new byte[toByte - fromByte + 1];
+
+                input.Seek(fromByte, SeekOrigin.Begin);
+                input.Read(buffer, 0, (toByte - fromByte + 1));
+
+                response.Headers.Add($"Content-Range", $"bytes {fromByte}-{toByte}/{input.Length}");
+                response.ContentLength = buffer.Length;
+
+                return buffer;
+            }
+            else
+            {
+                string boundary = RandomString(12);
+                string contentType = response.ContentType;
+                response.ContentType = $"multipart/byteranges; boundary={boundary}";
+
+                using (var ms = new MemoryStream())
+                {
+                    using (var writer = new StreamWriter(ms))
+                    {
+                        for (int i = 0; i < rangeBoundaries.Count(); i++)
+                        {
+                            int fromByte = rangeBoundaries[i].Item1;
+                            int toByte = rangeBoundaries[i].Item2;
+                            byte[] buffer = new byte[toByte - fromByte + 1];
+
+                            input.Seek(fromByte, SeekOrigin.Begin);
+                            input.Read(buffer, 0, (toByte - fromByte + 1));
+
+                            writer.Write($"--{boundary}\r\n");
+                            writer.Write($"Content-Type: {contentType}\r\n");
+                            writer.Write($"Content-Range: bytes {fromByte}-{toByte}/{input.Length}\r\n");
+                            writer.Write("\r\n");
+
+                            for (int j = 0; j < buffer.Length; j++) 
+                                writer.Write((char)buffer[j]);
+
+                            writer.Write("\r\n");
+                        }
+
+                        writer.Write($"--{boundary}--");
+                        writer.Flush();
+                    }
+
+                    ms.Flush();
+                    return ms.ToArray();
+                }
             }
         }
 
+        private static Random random = new Random();
+        public static string RandomString(int length)
+        {
+            const string chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+            return new string(Enumerable.Repeat(chars, length)
+              .Select(s => s[random.Next(s.Length)]).ToArray());
+        }
         private string GetRequestedFileName(ref MyRequest request)
         {
             string fileName = request.Uri.Substring(1);
@@ -1578,7 +1826,6 @@ namespace SharpWebServer
                 fileName = GetExistingIndexFileName();
             return fileName;
         }
-
         public static byte[] ReadFully(Stream input)
         {
             using (MemoryStream ms = new MemoryStream())
@@ -1587,7 +1834,6 @@ namespace SharpWebServer
                 return ms.ToArray();
             }
         }
-
         private string GetContentType(string filePath)
         {
             string mime;
@@ -1607,7 +1853,6 @@ namespace SharpWebServer
             }
             return null;
         }
-
         static void Usage()
         {
             Output(@"Usage:
@@ -1623,7 +1868,6 @@ Options:
     logfile - Path to output logfile.
 ");
         }
-
         static void Output(string txt)
         {
             if(outputToFile.Length > 0)
@@ -1635,7 +1879,6 @@ Options:
                 Console.WriteLine(txt);
             }
         }
-
         static void Main(string[] args)
         {
             if (args.Length < 1)
@@ -1687,11 +1930,7 @@ Authors:
                 dir = arguments["dir"];
             }
 
-            if (arguments.ContainsKey("logfile"))
-            {
-                Output("[.] Will write output to logfile : " + arguments["logfile"]);
-                outputToFile = arguments["logfile"];
-            }
+            Output($"[.] Serving files from directory : {dir}");
 
             int seconds = 0;
             if (arguments.ContainsKey("seconds"))
@@ -1714,7 +1953,13 @@ Authors:
                 ntlm = true;
             }
 
-            Output($"[.] Serving files from directory : {dir}\n");
+            if (arguments.ContainsKey("logfile"))
+            {
+                Output("[.] Will write output to logfile : " + arguments["logfile"]);
+                outputToFile = arguments["logfile"];
+            }
+
+            Output("\n");
 
             var server = new SharpWebServer(dir, port, ntlm, verbose);
 
