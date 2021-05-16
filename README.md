@@ -7,7 +7,7 @@ Requires .NET Framework 4.5 and _System.Net_ and _System.Net.Sockets_ references
 
 ## Usage
 
-```
+```powershell
     :: SharpWebServer ::
     a Red Team oriented C# Simple HTTP Server with Net-NTLMv1/2 hashes capture functionality
 
@@ -37,7 +37,8 @@ Options:
 Example use-case serving files and capturing Net-NTLM hashes at the same time:
 
 **Server**:
-```
+
+```powershell
 C:\> SharpWebServer.exe port=8888 dir=C:\Windows\Temp verbose=true ntlm=true
 
     :: SharpWebServer ::
@@ -62,7 +63,8 @@ Options:
 ```
 
 **Client**:
-```
+
+```powershell
 C:\> curl -sD- http://localhost:8888/test.txt --ntlm --negotiate -u TestUser:TestPassword
 HTTP/1.1 401 Unauthorized
 Transfer-Encoding: chunked
@@ -83,7 +85,8 @@ foobar
 ```
 
 **WebDAV client**:
-```
+
+```powershell
 C:\> dir \\localhost@8888\test
  Volume in drive \\localhost@8888\test has no label.
  Volume Serial Number is 0000-0000
