@@ -113,3 +113,20 @@ C:\> copy \\localhost@8888\test\test4\test5.txt .
   - https://github.com/mdsecactivebreach/Farmer
 
 - WebDAV implementation, NTLM Authentication keep-alive logic & all the rest `Mariusz B. / mgeeky, '21, <mb [at] binary-offensive.com>`
+
+
+
+---
+
+### ☕ Show Support ☕
+
+This and other projects are outcome of sleepless nights and **plenty of hard work**. If you like what I do and appreciate that I always give back to the community,
+[Consider buying me a coffee](https://github.com/sponsors/mgeeky) _(or better a beer)_ just to say thank you! 💪 
+
+---
+
+```   
+   Mariusz B. / mgeeky, 21
+   <mb [at] binary-offensive.com>
+   (https://github.com/mgeeky)
+```
