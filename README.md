@@ -15,7 +15,7 @@ Authors:
     - Can Güney Aksakalli (github.com/aksakalli)          - original implementation
     - harrypatrick442 (github.com/harrypatrick442)        - aksakalli's fork & changes
     - Dominic Chell (@domchell) from MDSec                - Net-NTLMv2 hashes capture code borrowed from Farmer
-    - Mariusz B. / mgeeky, <mb [at] binary-offensive.com> - combined all building blocks together,
+    - Mariusz Banach / mgeeky, <mb [at] binary-offensive.com> - combined all building blocks together,
                                                             added connection keep-alive to NTLM Authentication
 
 Usage:
@@ -112,7 +112,7 @@ C:\> copy \\localhost@8888\test\test4\test5.txt .
 - NTLM hashes capture code & TCP Listener backbone borrowed from MDSec ActiveBreach Farmer project written by Dominic Chell (@domchell):
   - https://github.com/mdsecactivebreach/Farmer
 
-- WebDAV implementation, NTLM Authentication keep-alive logic & all the rest `Mariusz B. / mgeeky, '21, <mb [at] binary-offensive.com>`
+- WebDAV implementation, NTLM Authentication keep-alive logic & all the rest `Mariusz Banach / mgeeky, '21, <mb [at] binary-offensive.com>`
 
 
 
@@ -126,7 +126,7 @@ This and other projects are outcome of sleepless nights and **plenty of hard wor
 ---
 
 ```   
-   Mariusz B. / mgeeky, 21
+   Mariusz Banach / mgeeky, 21
    <mb [at] binary-offensive.com>
    (https://github.com/mgeeky)
 ```

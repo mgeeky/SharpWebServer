@@ -10,7 +10,7 @@
 //      https://github.com/mdsecactivebreach/Farmer
 //
 // Patchworked by:
-//   Mariusz B. / mgeeky, '21, <mb [at] binary-offensive.com>
+//   Mariusz Banach / mgeeky, '21, <mb [at] binary-offensive.com>
 //
 
 using System;
@@ -1889,7 +1889,7 @@ Options:
 
 Authors: 
     - Dominic Chell (@domchell) from MDSec                - Net-NTLM hashes capture code borrowed from Farmer
-    - Mariusz B. / mgeeky, <mb [at] binary-offensive.com> - WebDAV implementation, NTLM Authentication keep-alive,
+    - Mariusz Banach / mgeeky, <mb [at] binary-offensive.com> - WebDAV implementation, NTLM Authentication keep-alive,
                                                             all the rest.
 ");
                 Usage();
