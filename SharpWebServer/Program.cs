@@ -866,14 +866,16 @@ namespace SharpWebServer
         private bool _Verbose;
         private bool _NTLM;
         private int _Port;
+        private bool _Redir;
 
-        public SharpWebServer(string directoryPath, int port, bool ntlm = false, bool verbose = false)
+        public SharpWebServer(string directoryPath, int port, bool ntlm = false, bool verbose = false, bool redir = false)
         {
             _RootDirectory = directoryPath;
             _AllowCors = false;
             _Verbose = verbose;
             _NTLM = ntlm;
             _Port = port;
+            _Redir = redir;
         }
 
         private void Initialize()
@@ -1281,36 +1283,70 @@ namespace SharpWebServer
         private void OnProcessGET(ref MyRequest request, ref MyResponse response)
         {
             string fileName = null;
-            try
-            {
-                fileName = GetRequestedFileName(ref request);
-                string filePath = fileName == null ? null : Path.Combine(_RootDirectory, fileName);
+            string queryString = null;
 
-                if (filePath == null || filePath.Length == 0)
+            if (_Redir)
+            {
+                try
                 {
-                    ReturnDirlisting(_RootDirectory, ref request, ref response);
-                    return;
+                    string redirUrl;
+                    queryString = request.Uri.Split('?')[1];
+                    string[] keyValuePairs = queryString.Split('&');
+                    foreach (string param in keyValuePairs)
+                    {
+                        string[] keyValue = param.Split('=');
+                        if (keyValue.Length == 2 && keyValue[0] == "redir")
+                        {
+                            redirUrl = Uri.UnescapeDataString(keyValue[1]);
+                            response.StatusCode = (int)HttpStatusCode.Redirect; // HTTP 302
+                            response.StatusMessage = "Found";
+                            response.Headers.Add("Location", redirUrl);
+                            return;
+                        }
+                    }
                 }
-                else if (File.Exists(filePath))
+                catch (Exception ex)
                 {
-                    ReturnFile(filePath, ref request, ref response);
-                    return;
-                }
-                else if (Directory.Exists(filePath))
-                {
-                    ReturnDirlisting(filePath, ref request, ref response);
-                    return;
+                    response.StatusCode = (int)HttpStatusCode.InternalServerError;
+                    response.StatusMessage = "Internal Server Error";
+                    Output($"[!] Exception occured while parsing redir parameter from: {queryString} . Exception: {ex}");
                 }
 
-                response.StatusCode = (int)HttpStatusCode.NotFound;
-                response.StatusMessage = "Not Found";
             }
-            catch (Exception ex)
+            else
             {
-                response.StatusCode = (int)HttpStatusCode.InternalServerError;
-                response.StatusMessage = "Internal Server Error";
-                Output($"[!] Exception occured while serving file: {fileName} . Exception: {ex}");
+                try
+                {
+                    fileName = GetRequestedFileName(ref request);
+                    string filePath = fileName == null ? null : Path.Combine(_RootDirectory, fileName);
+
+                    if (filePath == null || filePath.Length == 0)
+                    {
+                        ReturnDirlisting(_RootDirectory, ref request, ref response);
+                        return;
+                    }
+                    else if (File.Exists(filePath))
+                    {
+                        ReturnFile(filePath, ref request, ref response);
+                        return;
+                    }
+                    else if (Directory.Exists(filePath))
+                    {
+                        ReturnDirlisting(filePath, ref request, ref response);
+                        return;
+                    }
+
+                    response.StatusCode = (int)HttpStatusCode.NotFound;
+                    response.StatusMessage = "Not Found";
+                }
+                catch (Exception ex)
+                {
+                    response.StatusCode = (int)HttpStatusCode.InternalServerError;
+                    response.StatusMessage = "Internal Server Error";
+                    Output($"[!] Exception occured while serving file: {fileName} . Exception: {ex}");
+                }
             }
+            
         }
 
         private void OnProcessHEAD(ref MyRequest request, ref MyResponse response)
@@ -1856,15 +1892,16 @@ $FILES$    </ul>
         static void Usage()
         {
             Output(@"Usage:
-    SharpWebServer.exe <port=port> [dir=path] [verbose=true] [ntlm=true] [logfile=path]
+    SharpWebServer.exe <port=port> [dir=path] [verbose=true] [ntlm=true] [redir=true] [logfile=path]
 
 Options:
     port    - TCP Port number on which to listen (1-65535)
     dir     - Directory with files to be hosted.
     verbose - Turn verbose mode on.
     seconds - Specifies how long should the server be running. Default: indefinitely
-    ntlm    - Require NTLM Authentication before serving files. Useful to collect NetNTLM hashes 
+    ntlm    - Require NTLM Authentication before serving files. Useful to collect NetNTLMv2 hashes 
               (in MDSec's Farmer style)
+    redir   - Redirect after NTLM authentication based on redir paramerer in the url (e.g. ?redir=https://example.com)
     logfile - Path to output logfile.
 ");
         }
@@ -1953,15 +1990,24 @@ Authors:
                 ntlm = true;
             }
 
+            bool redir = false;
+            if (arguments.ContainsKey("redir") && arguments["redir"].ToLower().Equals("true"))
+            {
+                Output($"[.] Enabling redirection");
+                redir = true;
+            }
+
             if (arguments.ContainsKey("logfile"))
             {
                 Output("[.] Will write output to logfile : " + arguments["logfile"]);
                 outputToFile = arguments["logfile"];
             }
 
+
+
             Output("\n");
 
-            var server = new SharpWebServer(dir, port, ntlm, verbose);
+            var server = new SharpWebServer(dir, port, ntlm, verbose, redir);
 
             server.Initialize();
 

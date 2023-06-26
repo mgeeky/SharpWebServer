@@ -19,15 +19,16 @@ Authors:
                                                             added connection keep-alive to NTLM Authentication
 
 Usage:
-    SharpWebServer.exe <port=port> [dir=path] [verbose=true] [ntlm=true] [logfile=path]
+    SharpWebServer.exe <port=port> [dir=path] [verbose=true] [ntlm=true] [redir=true] [logfile=path]
 
 Options:
     port    - TCP Port number on which to listen (1-65535)
     dir     - Directory with files to be hosted.
     verbose - Turn verbose mode on.
     seconds - Specifies how long should the server be running. Default: indefinitely
-    ntlm    - Require NTLM Authentication before serving files. Useful to collect NetNTLMv2 hashes
+    ntlm    - Require NTLM Authentication before serving files. Useful to collect NetNTLM hashes
               (in MDSec's Farmer style)
+    redir   - Redirect after NTLM authentication based on redir paramerer in the url (e.g. ?redir=https://example.com)
     logfile - Path to output logfile.
 
 ```
